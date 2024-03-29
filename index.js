@@ -7,7 +7,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const jwt = require("jsonwebtoken");
 const morgan = require("morgan");
 const port = process.env.PORT || 5000;
-
+const stripe = require("stripe")(process.env.PAYMENT_SECRET_KEY);
 // ============== middleware =============================
 const corsOptions = {
   origin: ["http://localhost:5173", "http://localhost:5174"],
@@ -53,6 +53,8 @@ async function run() {
     // ====================All Collection=============================================================================
     const usersCollection = client.db("stayVistaDb").collection("users");
     const roomCollection = client.db("stayVistaDb").collection("rooms");
+    const bookingsCollection = client.db("stayVistaDb").collection("bookings");
+
     // =================== auth related api =========================================================
     app.post("/jwt", async (req, res) => {
       const user = req.body;
@@ -137,6 +139,50 @@ async function run() {
     app.post("/rooms", verifyToken, async (req, res) => {
       const room = req.body;
       const result = await roomCollection.insertOne(room);
+      res.send(result);
+    });
+
+    // ======================Payment===========================================
+    // Generate client secret for successful connection
+    app.post("/create-payment-intent", verifyToken, async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      if (!price || amount < 1) return;
+
+      const { client_secret } = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.send({ clientSecret: client_secret });
+    });
+
+    // save booking info in booking collection
+    app.post("/bookings", verifyToken, async (req, res) => {
+      const booking = req.body;
+      const result = await bookingsCollection.insertOne(booking);
+      // send email
+      res.send(result);
+    });
+    // update room booking status
+    app.patch("/rooms/status/:id", async (req, res) => {
+      const id = req.params.id;
+      const status = req.body.status;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          booked: status,
+        },
+      };
+      const result = await roomCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+    // Get all bookings for guest
+    app.get("/bookings", verifyToken, async (req, res) => {
+      const email = req.query.email;
+      if (!email) return res.send([]);
+      const query = { "guest.email": email };
+      const result = await bookingsCollection.find(query).toArray();
       res.send(result);
     });
     // ===========================================================================
